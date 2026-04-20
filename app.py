@@ -546,6 +546,24 @@ def grade_with_claude(essay_text, total_points, rubric_text,
         else "IELTS Writing Task 2 (Extended essay — argument, opinion, or discussion)"
     )
     topic_block = f"\nTASK PROMPT:\n{essay_topic}" if essay_topic.strip() else ""
+    criteria_heading = "TASK 1 - key criteria:" if task_type == "task1" else "TASK 2 - key criteria:"
+    task_response_label = "Task Achievement" if task_type == "task1" else "Task Response"
+    if task_type == "task1":
+        task_criteria_text = (
+            "Task Achievement: overview present, all key features covered, data accurate, no opinion, >=150 words.\n"
+            "Coherence: intro paraphrases task, body groups trends logically, cohesive devices varied.\n"
+            "Lexical: data-description verbs (peaked, fluctuated, rose sharply), no verb repetition.\n"
+            "Grammar: passives for reporting, comparatives correct, subject-verb agreement.\n"
+            "Flag: missing overview, data misread, listing every figure, copied prompt, \"In my opinion\"."
+        )
+    else:
+        task_criteria_text = (
+            "Task Response: all prompt parts addressed, clear position maintained, ideas developed with specific support, >=250 words.\n"
+            "Coherence: 4-paragraph structure, topic sentence per paragraph, cohesive devices varied.\n"
+            "Lexical: topic vocabulary accurate, correct collocations, no informal language.\n"
+            "Grammar: mixed sentence types, correct tense/articles/agreement.\n"
+            "Flag: ignoring one part of the prompt, contradicting own position, weak examples, over-generalising."
+        )
 
     user_content: list = []
     if task_type == "task1" and image_data and image_media_type:
@@ -597,41 +615,31 @@ RUBRIC:
                 "type": "text",
                 "text": f"""TASK TYPE: {task_label}
 
-{"TASK 1 — key criteria:" if task_type == "task1" else "TASK 2 — key criteria:"}
-{"""Task Achievement: overview present, all key features covered, data accurate, no opinion, ≥150 words.
-Coherence: intro paraphrases task, body groups trends logically, cohesive devices varied.
-Lexical: data-description verbs (peaked, fluctuated, rose sharply), no verb repetition.
-Grammar: passives for reporting, comparatives correct, subject-verb agreement.
-Flag: missing overview, data misread, listing every figure, copied prompt, "In my opinion".
-""" if task_type == "task1" else """Task Response: all prompt parts addressed, clear position maintained, ideas developed with specific support, ≥250 words.
-Coherence: 4-paragraph structure, topic sentence per paragraph, cohesive devices varied.
-Lexical: topic vocabulary accurate, correct collocations, no informal language.
-Grammar: mixed sentence types, correct tense/articles/agreement.
-Flag: ignoring one part of the prompt, contradicting own position, weak examples, over-generalising.
-"""}
+{criteria_heading}
+{task_criteria_text}
 Return ONLY valid JSON — no extra text. Use this exact structure:
 {{
-  "task_response_score":      <integer 0–9, scoring {'Task Achievement' if task_type == 'task1' else 'Task Response'}>,
-  "coherence_score":          <integer 0–9>,
-  "lexical_resource_score":   <integer 0–9>,
-  "grammar_score":            <integer 0–9>,
-  "total_score":              <integer 0–{total_points}>,
-  "task_response_comment":    "<1–2 sentence summary of {'Task Achievement' if task_type == 'task1' else 'Task Response'} performance>",
+    "task_response_score":      <integer 0-9, scoring {task_response_label}>,
+    "coherence_score":          <integer 0-9>,
+    "lexical_resource_score":   <integer 0-9>,
+    "grammar_score":            <integer 0-9>,
+    "total_score":              <integer 0-{total_points}>,
+    "task_response_comment":    "<1-2 sentence summary of {task_response_label} performance>",
   "task_response_inline": [
     {{"quote": "<exact phrase>", "issue": "<problem>", "suggestion": "<fix>"}},
     ...2–4 items max...
   ],
-  "coherence_comment":        "<1–2 sentence summary of Coherence and Cohesion>",
+    "coherence_comment":        "<1-2 sentence summary of Coherence and Cohesion>",
   "coherence_inline": [
     {{"quote": "<exact phrase>", "issue": "<problem>", "suggestion": "<fix>"}},
     ...2–4 items max...
   ],
-  "lexical_resource_comment": "<1–2 sentence summary of Lexical Resource>",
+    "lexical_resource_comment": "<1-2 sentence summary of Lexical Resource>",
   "lexical_resource_inline": [
     {{"quote": "<exact phrase>", "issue": "<problem>", "suggestion": "<fix>"}},
     ...2–4 items max...
   ],
-  "grammar_comment":          "<1–2 sentence summary of Grammar Range and Accuracy>",
+    "grammar_comment":          "<1-2 sentence summary of Grammar Range and Accuracy>",
   "grammar_inline": [
     {{"quote": "<exact phrase>", "issue": "<problem>", "suggestion": "<fix>"}},
     ...2–4 items max...
