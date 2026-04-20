@@ -8,5 +8,5 @@ services:
     env_file:
       - .env
     volumes:
-      - .:/app
+      - ./service-account.json:/app/service-account.json:ro
     restart: unless-stopped
