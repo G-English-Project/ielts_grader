@@ -3,6 +3,8 @@ import requests
 import re
 import json
 import os
+import uuid
+import base64
 import anthropic
 from dotenv import load_dotenv
 from google.oauth2 import service_account
@@ -304,9 +306,19 @@ def extract_gdoc_id(text):
 
 
 def fetch_gdoc_text(doc_id):
-    """Export a Google Doc as plain text."""
-    url = f"https://docs.google.com/document/d/{doc_id}/export?format=txt"
+    """Export a Google Doc as plain text, using the service account when available."""
+    # Try authenticated export via Drive API first (works for private docs)
+    if docs_service:
+        try:
+            drive = build("drive", "v3", credentials=_gdocs_creds, cache_discovery=False)
+            resp = drive.files().export(fileId=doc_id, mimeType="text/plain").execute()
+            text = resp.decode("utf-8") if isinstance(resp, bytes) else resp
+            return text.strip() if text else None
+        except Exception:
+            pass
+    # Fall back to unauthenticated public export
     try:
+        url = f"https://docs.google.com/document/d/{doc_id}/export?format=txt"
         resp = requests.get(url, allow_redirects=True, timeout=20)
         if resp.status_code == 200:
             return resp.text.strip()
@@ -380,7 +392,7 @@ _CRITERION_RGB = {
 }
 
 
-def append_gdoc_feedback(doc_id, overall_feedback, breakdown, criterion_comments, criterion_inline=None):
+def append_gdoc_feedback(doc_id, overall_feedback, breakdown, criterion_comments, criterion_inline=None, task_type="task2"):
     """Append AI feedback as colored text at the end of a Google Doc.
 
     Uses the Docs API batchUpdate to insert formatted text in one atomic call.
@@ -413,7 +425,7 @@ def append_gdoc_feedback(doc_id, overall_feedback, breakdown, criterion_comments
         offset += ln
 
     CRITERION_ORDER = [
-        ("task_response",    "Task Response"),
+        ("task_response",    "Task Achievement" if task_type == "task1" else "Task Response"),
         ("coherence",        "Coherence & Cohesion"),
         ("lexical_resource", "Lexical Resource"),
         ("grammar",          "Grammar Range & Accuracy"),
@@ -521,66 +533,115 @@ def append_gdoc_feedback(doc_id, overall_feedback, breakdown, criterion_comments
     return True, None
 
 
-def grade_with_claude(essay_text, total_points, rubric_text):
+_task_images: dict = {}
+
+
+def grade_with_claude(essay_text, total_points, rubric_text,
+                      task_type="task2", essay_topic="",
+                      image_data=None, image_media_type=None):
     """Send essay to Claude and get back structured grades. Rubric is cached."""
+    task_label = (
+        "IELTS Writing Task 1 (Academic — describe a visual: graph, chart, diagram, or map)"
+        if task_type == "task1"
+        else "IELTS Writing Task 2 (Extended essay — argument, opinion, or discussion)"
+    )
+    topic_block = f"\nTASK PROMPT:\n{essay_topic}" if essay_topic.strip() else ""
+
+    user_content: list = []
+    if task_type == "task1" and image_data and image_media_type:
+        user_content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": image_media_type, "data": image_data},
+        })
+    user_content.append({
+        "type": "text",
+        "text": f"{topic_block}\n\nESSAY:\n{essay_text[:5000]}".lstrip(),
+    })
+
     response = anthropic_client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=3000,
-        temperature=0.2,
+        max_tokens=2000,
+        temperature=0.1,
         system=[
             {
                 "type": "text",
-                "text": f"""You are an experienced IELTS writing examiner. Your job is to grade student essays and provide detailed, specific inline feedback in the style of an expert writing coach.
+                "text": f"""You are a strict, experienced IELTS writing examiner. Your default assumption is that student work has weaknesses — your job is to find them and explain them clearly.
 
-When commenting, always:
-- Quote the EXACT phrase or sentence from the essay that needs attention (short, precise excerpts)
-- State the specific problem (e.g. "unconvincing example", "off-topic", "wrong word choice", "not parallel", "tense inconsistency", "redundant", "context missing", "does not answer the question")
-- Provide a concrete suggestion or rewrite where possible (e.g. "replace with: ...", "try: ...", "→ occupation")
+SCORING PHILOSOPHY — be strict:
+- Award the band the response EARNS, not the band that would encourage the student. Most student responses fall in Band 5–6.
+- A Band 7 requires consistent control with only minor lapses. Band 8+ is rare and requires near-native fluency.
+- Deduct a full band for each significant recurring error type (e.g. systematic article errors, repeated off-topic paragraphs, no overview in Task 1).
+- Do NOT round up. If a response is between two bands, assign the lower one.
 
-Examples of good inline comments:
-- quote: "students become outdated", issue: "what is outdated is their knowledge, not themselves", suggestion: "their knowledge becomes outdated"
-- quote: "firstly", issue: "unusual transition here — 'firstly' implies a list but no second point follows", suggestion: "remove or replace with 'One reason is that'"
-- quote: "jobs", issue: "inaccurate word choice", suggestion: "occupation"
-- quote: "His success outside college", issue: "example does not support your conclusion — success without college ≠ college cannot help", suggestion: "Strengthen with: 'Although X succeeded without college, this does not mean college cannot develop the same qualities.'"
-- quote: "However, universities", issue: "not logical to use 'However' here — no contrast with previous sentence", suggestion: "Start a new paragraph or use 'In addition'"
+INLINE COMMENTS — concise and targeted:
+- Pick the 2–4 most impactful errors per criterion only.
+- Quote the EXACT phrase (3–8 words max).
+- Problem statement: one short clause — no padding.
+- Suggestion: one short rewrite or fix — no explanations.
+- Prioritise errors that most lower the band score.
+
+Good inline comment examples:
+- quote: "students become outdated", issue: "subject is wrong — knowledge becomes outdated, not students", suggestion: "their knowledge becomes outdated"
+- quote: "Firstly", issue: "'Firstly' implies a numbered list but no second point follows in the paragraph", suggestion: "One reason is that"
+- quote: "jobs", issue: "imprecise — use a formal, specific word", suggestion: "occupation / employment"
+- quote: "the graph shows an increase", issue: "vague — no values or time period cited", suggestion: "the proportion rose sharply from 20% in 2000 to 35% by 2020"
+- quote: "However, universities", issue: "'However' signals contrast but the previous sentence is not a contrasting idea", suggestion: "Furthermore, / In addition,"
+- quote: "In my opinion", issue: "personal opinion is inappropriate in Task 1 — report data only", suggestion: "Overall, it is evident that"
+- quote: "make a research", issue: "wrong collocation", suggestion: "conduct research / carry out a study"
 
 RUBRIC:
-{rubric_text}
+{rubric_text}""",
+                "cache_control": {"type": "ephemeral"},
+            },
+            {
+                "type": "text",
+                "text": f"""TASK TYPE: {task_label}
 
+{"TASK 1 — key criteria:" if task_type == "task1" else "TASK 2 — key criteria:"}
+{"""Task Achievement: overview present, all key features covered, data accurate, no opinion, ≥150 words.
+Coherence: intro paraphrases task, body groups trends logically, cohesive devices varied.
+Lexical: data-description verbs (peaked, fluctuated, rose sharply), no verb repetition.
+Grammar: passives for reporting, comparatives correct, subject-verb agreement.
+Flag: missing overview, data misread, listing every figure, copied prompt, "In my opinion".
+""" if task_type == "task1" else """Task Response: all prompt parts addressed, clear position maintained, ideas developed with specific support, ≥250 words.
+Coherence: 4-paragraph structure, topic sentence per paragraph, cohesive devices varied.
+Lexical: topic vocabulary accurate, correct collocations, no informal language.
+Grammar: mixed sentence types, correct tense/articles/agreement.
+Flag: ignoring one part of the prompt, contradicting own position, weak examples, over-generalising.
+"""}
 Return ONLY valid JSON — no extra text. Use this exact structure:
 {{
-  "task_response_score":      <integer 0–9>,
+  "task_response_score":      <integer 0–9, scoring {'Task Achievement' if task_type == 'task1' else 'Task Response'}>,
   "coherence_score":          <integer 0–9>,
   "lexical_resource_score":   <integer 0–9>,
   "grammar_score":            <integer 0–9>,
   "total_score":              <integer 0–{total_points}>,
-  "task_response_comment":    "<1–2 sentence summary of Task Response performance>",
+  "task_response_comment":    "<1–2 sentence summary of {'Task Achievement' if task_type == 'task1' else 'Task Response'} performance>",
   "task_response_inline": [
-    {{"quote": "<exact phrase from essay>", "issue": "<specific problem>", "suggestion": "<rewrite or fix>"}},
-    ...2–4 items...
+    {{"quote": "<exact phrase>", "issue": "<problem>", "suggestion": "<fix>"}},
+    ...2–4 items max...
   ],
-  "coherence_comment":        "<1–2 sentence summary of Coherence and Cohesion performance>",
+  "coherence_comment":        "<1–2 sentence summary of Coherence and Cohesion>",
   "coherence_inline": [
-    {{"quote": "<exact phrase from essay>", "issue": "<specific problem>", "suggestion": "<rewrite or fix>"}},
-    ...2–4 items...
+    {{"quote": "<exact phrase>", "issue": "<problem>", "suggestion": "<fix>"}},
+    ...2–4 items max...
   ],
-  "lexical_resource_comment": "<1–2 sentence summary of Lexical Resource performance>",
+  "lexical_resource_comment": "<1–2 sentence summary of Lexical Resource>",
   "lexical_resource_inline": [
-    {{"quote": "<exact phrase from essay>", "issue": "<specific problem>", "suggestion": "<rewrite or fix>"}},
-    ...2–4 items...
+    {{"quote": "<exact phrase>", "issue": "<problem>", "suggestion": "<fix>"}},
+    ...2–4 items max...
   ],
-  "grammar_comment":          "<1–2 sentence summary of Grammar Range and Accuracy performance>",
+  "grammar_comment":          "<1–2 sentence summary of Grammar Range and Accuracy>",
   "grammar_inline": [
-    {{"quote": "<exact phrase from essay>", "issue": "<specific problem>", "suggestion": "<rewrite or fix>"}},
-    ...2–4 items...
+    {{"quote": "<exact phrase>", "issue": "<problem>", "suggestion": "<fix>"}},
+    ...2–4 items max...
   ],
-  "feedback": "<overall 2–4 sentence summary: what the student did well + top priorities to improve>"
+  "feedback": "<2–3 sentence summary: what was done well + top 2 priorities to improve>"
 }}""",
-                "cache_control": {"type": "ephemeral"},
-            }
+            },
         ],
         messages=[
-            {"role": "user", "content": f"ESSAY:\n{essay_text[:5000]}"},
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": "{"},
         ],
     )
@@ -600,15 +661,39 @@ def index():
     return send_from_directory("templates", "index.html")
 
 
+@app.route("/api/upload-task-image", methods=["POST"])
+def upload_task_image():
+    file = request.files.get("image")
+    if not file:
+        return jsonify({"error": "No image provided"}), 400
+    data = base64.b64encode(file.read()).decode("utf-8")
+    raw_type = (file.content_type or "").split(";")[0].strip().lower()
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+    _ext_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                "gif": "image/gif", "webp": "image/webp"}
+    _allowed = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+    media_type = raw_type if raw_type in _allowed else _ext_map.get(ext, "image/jpeg")
+    key = str(uuid.uuid4())
+    _task_images[key] = {"data": data, "media_type": media_type}
+    return jsonify({"key": key})
+
+
 @app.route("/api/grade-stream")
 def grade_stream():
     """Server-Sent Events: grades each student one-by-one.
-    Query params: course_id, assignment_id, total_points"""
-    course_id     = request.args.get("course_id", "").strip()
-    assignment_id = request.args.get("assignment_id", "").strip()
-    total_points  = int(request.args.get("total_points", 36))
-    rubric_text   = request.args.get("rubric", RUBRIC).strip() or RUBRIC
-    section_id    = request.args.get("section_id", "").strip() or None
+    Query params: course_id, assignment_id, total_points, task_type, essay_topic, task_image_key"""
+    course_id       = request.args.get("course_id", "").strip()
+    assignment_id   = request.args.get("assignment_id", "").strip()
+    total_points    = int(request.args.get("total_points", 36))
+    rubric_text     = request.args.get("rubric", RUBRIC).strip() or RUBRIC
+    section_id      = request.args.get("section_id", "").strip() or None
+    task_type       = request.args.get("task_type", "task2").strip() or "task2"
+    essay_topic     = request.args.get("essay_topic", "").strip()
+    task_image_key  = request.args.get("task_image_key", "").strip() or None
+
+    img = _task_images.get(task_image_key) if task_image_key else None
+    image_data       = img["data"] if img else None
+    image_media_type = img["media_type"] if img else None
 
     def generate():
         if not course_id or not assignment_id:
@@ -616,6 +701,8 @@ def grade_stream():
             return
 
         try:
+            yield f"data: {json.dumps({'type': 'progress', 'message': 'Fetching submissions from Canvas…'})}\n\n"
+
             submissions = get_canvas_submissions(course_id, assignment_id, section_id)
             active = [
                 s for s in submissions
@@ -627,7 +714,7 @@ def grade_stream():
                 yield f"data: {json.dumps({'type': 'error', 'message': f'No submissions found for this section with Assignment ID {assignment_id}. This section may use a different Assignment ID — check the Canvas URL when viewing this section.'})}\n\n"
                 return
 
-            yield f"data: {json.dumps({'type': 'total', 'count': len(active)})}\n\n"
+            yield f"data: {json.dumps({'type': 'progress', 'message': f'Found {len(active)} submission(s). Starting grading…', 'current': 0, 'total': len(active)})}\n\n"
 
             for i, sub in enumerate(active):
                 student_name = sub.get("user", {}).get("name", f"Student {sub['user_id']}")
@@ -635,47 +722,85 @@ def grade_stream():
                 raw          = sub.get("url") or sub.get("body") or ""
                 doc_id       = extract_gdoc_id(raw)
 
+                yield f"data: {json.dumps({'type': 'progress', 'message': f'Grading {student_name}…', 'current': i, 'total': len(active)})}\n\n"
+
+                google_doc_url = f"https://docs.google.com/document/d/{doc_id}/edit" if doc_id else raw
                 base = {
-                    "type":         "result",
-                    "index":        i,
-                    "student_name": student_name,
-                    "student_id":   student_id,
-                    "doc_url":      f"https://docs.google.com/document/d/{doc_id}/edit" if doc_id else raw,
+                    "student":        student_name,
+                    "student_id":     student_id,
+                    "google_doc_url": google_doc_url,
+                    "doc_id":         doc_id,
+                    "max_score":      total_points,
                 }
 
+                def _err(msg):
+                    return json.dumps({
+                        "type": "result", "current": i + 1, "total": len(active),
+                        "data": {**base, "error": msg},
+                    })
+
                 if not doc_id:
-                    yield f"data: {json.dumps({**base, 'score': None, 'feedback': 'No Google Doc link found in submission.', 'breakdown': {}, 'status': 'error'})}\n\n"
+                    yield f"data: {_err('No Google Doc link found in submission.')}\n\n"
                     continue
 
                 essay_text = fetch_gdoc_text(doc_id)
                 if not essay_text:
-                    yield f"data: {json.dumps({**base, 'score': None, 'feedback': 'Could not read the Google Doc (check sharing settings).', 'breakdown': {}, 'status': 'error'})}\n\n"
+                    yield f"data: {_err('Could not read the Google Doc (check sharing settings).')}\n\n"
                     continue
 
                 try:
-                    result = grade_with_claude(essay_text, total_points, rubric_text)
+                    result = grade_with_claude(
+                        essay_text, total_points, rubric_text,
+                        task_type, essay_topic, image_data, image_media_type,
+                    )
+
+                    def _inline_issues(key):
+                        items = []
+                        for it in _inline_raw(key):
+                            quote = it.get("quote", "")
+                            issue = it.get("issue", "")
+                            suggestion = it.get("suggestion", "")
+                            line = f'"{quote}" — {issue}'
+                            if suggestion:
+                                line += f" → {suggestion}"
+                            items.append(line)
+                        return items
+
+                    KEYS = ("task_response", "coherence", "lexical_resource", "grammar")
+                    # For Task 1 Claude may return task_achievement_* instead of task_response_*
+                    def _score(key):
+                        v = result.get(f"{key}_score")
+                        if v is None and key == "task_response":
+                            v = result.get("task_achievement_score")
+                        return v or 0
+                    def _comment(key):
+                        v = result.get(f"{key}_comment", "")
+                        if not v and key == "task_response":
+                            v = result.get("task_achievement_comment", "")
+                        return v
+                    def _inline_raw(key):
+                        v = result.get(f"{key}_inline")
+                        if not v and key == "task_response":
+                            v = result.get("task_achievement_inline")
+                        return v or []
+                    criterion_scores   = {k: _score(k) for k in KEYS}
+                    criterion_comments = {k: _comment(k) for k in KEYS}
+                    criterion_inline   = {k: _inline_raw(k) for k in KEYS}
+
                     breakdown = {
-                        "task_response":    result.get("task_response_score", 0),
-                        "coherence":        result.get("coherence_score", 0),
-                        "lexical_resource": result.get("lexical_resource_score", 0),
-                        "grammar":          result.get("grammar_score", 0),
+                        k: {
+                            "score":         criterion_scores[k],
+                            "max":           9,
+                            "justification": criterion_comments[k],
+                            "issues":        _inline_issues(k),
+                        }
+                        for k in KEYS
                     }
-                    criterion_comments = {
-                        "task_response":    result.get("task_response_comment", ""),
-                        "coherence":        result.get("coherence_comment", ""),
-                        "lexical_resource": result.get("lexical_resource_comment", ""),
-                        "grammar":          result.get("grammar_comment", ""),
-                    }
-                    criterion_inline = {
-                        "task_response":    result.get("task_response_inline", []),
-                        "coherence":        result.get("coherence_inline", []),
-                        "lexical_resource": result.get("lexical_resource_inline", []),
-                        "grammar":          result.get("grammar_inline", []),
-                    }
-                    yield f"data: {json.dumps({**base, 'score': result['total_score'], 'feedback': result['feedback'], 'breakdown': breakdown, 'criterion_comments': criterion_comments, 'criterion_inline': criterion_inline, 'status': 'graded'})}\n\n"
+
+                    yield f"data: {json.dumps({'type': 'result', 'current': i + 1, 'total': len(active), 'data': {**base, 'score': result['total_score'], 'overall_feedback': result['feedback'], 'breakdown': breakdown, 'criterion_scores': criterion_scores, 'criterion_comments': criterion_comments, 'criterion_inline': criterion_inline, 'task_type': task_type}})}\n\n"
 
                 except Exception as e:
-                    yield f"data: {json.dumps({**base, 'score': None, 'feedback': f'Grading error: {e}', 'breakdown': {}, 'status': 'error'})}\n\n"
+                    yield f"data: {_err(f'Grading error: {e}')}\n\n"
 
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
@@ -687,6 +812,48 @@ def grade_stream():
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.route("/api/default-rubric")
+def default_rubric():
+    """Return the server-side default rubric text."""
+    return jsonify({"rubric": RUBRIC.strip()})
+
+
+@app.route("/api/canvas-assignments")
+def canvas_assignments():
+    """Return all assignments for a Canvas course."""
+    course_id = request.args.get("course_id", "").strip()
+    if not course_id:
+        return jsonify({"error": "course_id is required"}), 400
+    try:
+        url = f"https://{CANVAS_DOMAIN}/api/v1/courses/{course_id}/assignments"
+        headers = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
+        all_assignments = []
+        params = {"per_page": 100, "order_by": "due_at"}
+        while url:
+            resp = requests.get(url, headers=headers, params=params, timeout=20)
+            resp.raise_for_status()
+            all_assignments.extend(resp.json())
+            link = resp.headers.get("Link", "")
+            next_url = None
+            for part in link.split(","):
+                if 'rel="next"' in part:
+                    next_url = part.split(";")[0].strip().strip("<>")
+            url = next_url
+            params = {}
+        result = [
+            {
+                "id":             a["id"],
+                "name":           a.get("name", ""),
+                "points_possible": a.get("points_possible") or 0,
+                "due_at":         a.get("due_at", ""),
+            }
+            for a in all_assignments
+        ]
+        return jsonify({"assignments": result})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/canvas-sections")
@@ -787,6 +954,7 @@ def post_gdoc_comments_route():
                 g.get("breakdown", {}),
                 g.get("criterion_comments", {}),
                 g.get("criterion_inline", {}),
+                task_type=g.get("task_type", "task2"),
             )
             results.append({
                 "student_id": g["student_id"],
