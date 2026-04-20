@@ -661,6 +661,20 @@ def index():
     return send_from_directory("templates", "index.html")
 
 
+_rubric_store: dict = {}
+
+
+@app.route("/api/store-rubric", methods=["POST"])
+def store_rubric():
+    """Store a custom rubric server-side and return a short key."""
+    rubric = (request.json or {}).get("rubric", "").strip()
+    if not rubric:
+        return jsonify({"error": "rubric is required"}), 400
+    key = str(uuid.uuid4())
+    _rubric_store[key] = rubric
+    return jsonify({"key": key})
+
+
 @app.route("/api/upload-task-image", methods=["POST"])
 def upload_task_image():
     file = request.files.get("image")
@@ -685,7 +699,8 @@ def grade_stream():
     course_id       = request.args.get("course_id", "").strip()
     assignment_id   = request.args.get("assignment_id", "").strip()
     total_points    = int(request.args.get("total_points", 36))
-    rubric_text     = request.args.get("rubric", RUBRIC).strip() or RUBRIC
+    rubric_key      = request.args.get("rubric_key", "").strip()
+    rubric_text     = _rubric_store.get(rubric_key) or request.args.get("rubric", "").strip() or RUBRIC
     section_id      = request.args.get("section_id", "").strip() or None
     task_type       = request.args.get("task_type", "task2").strip() or "task2"
     essay_topic     = request.args.get("essay_topic", "").strip()
