@@ -546,24 +546,6 @@ def grade_with_claude(essay_text, total_points, rubric_text,
         else "IELTS Writing Task 2 (Extended essay — argument, opinion, or discussion)"
     )
     topic_block = f"\nTASK PROMPT:\n{essay_topic}" if essay_topic.strip() else ""
-    criteria_heading = "TASK 1 - key criteria:" if task_type == "task1" else "TASK 2 - key criteria:"
-    task_response_label = "Task Achievement" if task_type == "task1" else "Task Response"
-    if task_type == "task1":
-        task_criteria_text = (
-            "Task Achievement: overview present, all key features covered, data accurate, no opinion, >=150 words.\n"
-            "Coherence: intro paraphrases task, body groups trends logically, cohesive devices varied.\n"
-            "Lexical: data-description verbs (peaked, fluctuated, rose sharply), no verb repetition.\n"
-            "Grammar: passives for reporting, comparatives correct, subject-verb agreement.\n"
-            "Flag: missing overview, data misread, listing every figure, copied prompt, \"In my opinion\"."
-        )
-    else:
-        task_criteria_text = (
-            "Task Response: all prompt parts addressed, clear position maintained, ideas developed with specific support, >=250 words.\n"
-            "Coherence: 4-paragraph structure, topic sentence per paragraph, cohesive devices varied.\n"
-            "Lexical: topic vocabulary accurate, correct collocations, no informal language.\n"
-            "Grammar: mixed sentence types, correct tense/articles/agreement.\n"
-            "Flag: ignoring one part of the prompt, contradicting own position, weak examples, over-generalising."
-        )
 
     user_content: list = []
     if task_type == "task1" and image_data and image_media_type:
@@ -615,31 +597,41 @@ RUBRIC:
                 "type": "text",
                 "text": f"""TASK TYPE: {task_label}
 
-{criteria_heading}
-{task_criteria_text}
+{"TASK 1 — key criteria:" if task_type == "task1" else "TASK 2 — key criteria:"}
+{"""Task Achievement: overview present, all key features covered, data accurate, no opinion, ≥150 words.
+Coherence: intro paraphrases task, body groups trends logically, cohesive devices varied.
+Lexical: data-description verbs (peaked, fluctuated, rose sharply), no verb repetition.
+Grammar: passives for reporting, comparatives correct, subject-verb agreement.
+Flag: missing overview, data misread, listing every figure, copied prompt, "In my opinion".
+""" if task_type == "task1" else """Task Response: all prompt parts addressed, clear position maintained, ideas developed with specific support, ≥250 words.
+Coherence: 4-paragraph structure, topic sentence per paragraph, cohesive devices varied.
+Lexical: topic vocabulary accurate, correct collocations, no informal language.
+Grammar: mixed sentence types, correct tense/articles/agreement.
+Flag: ignoring one part of the prompt, contradicting own position, weak examples, over-generalising.
+"""}
 Return ONLY valid JSON — no extra text. Use this exact structure:
 {{
-    "task_response_score":      <integer 0-9, scoring {task_response_label}>,
-    "coherence_score":          <integer 0-9>,
-    "lexical_resource_score":   <integer 0-9>,
-    "grammar_score":            <integer 0-9>,
-    "total_score":              <integer 0-{total_points}>,
-    "task_response_comment":    "<1-2 sentence summary of {task_response_label} performance>",
+  "task_response_score":      <integer 0–9, scoring {'Task Achievement' if task_type == 'task1' else 'Task Response'}>,
+  "coherence_score":          <integer 0–9>,
+  "lexical_resource_score":   <integer 0–9>,
+  "grammar_score":            <integer 0–9>,
+  "total_score":              <integer 0–{total_points}>,
+  "task_response_comment":    "<1–2 sentence summary of {'Task Achievement' if task_type == 'task1' else 'Task Response'} performance>",
   "task_response_inline": [
     {{"quote": "<exact phrase>", "issue": "<problem>", "suggestion": "<fix>"}},
     ...2–4 items max...
   ],
-    "coherence_comment":        "<1-2 sentence summary of Coherence and Cohesion>",
+  "coherence_comment":        "<1–2 sentence summary of Coherence and Cohesion>",
   "coherence_inline": [
     {{"quote": "<exact phrase>", "issue": "<problem>", "suggestion": "<fix>"}},
     ...2–4 items max...
   ],
-    "lexical_resource_comment": "<1-2 sentence summary of Lexical Resource>",
+  "lexical_resource_comment": "<1–2 sentence summary of Lexical Resource>",
   "lexical_resource_inline": [
     {{"quote": "<exact phrase>", "issue": "<problem>", "suggestion": "<fix>"}},
     ...2–4 items max...
   ],
-    "grammar_comment":          "<1-2 sentence summary of Grammar Range and Accuracy>",
+  "grammar_comment":          "<1–2 sentence summary of Grammar Range and Accuracy>",
   "grammar_inline": [
     {{"quote": "<exact phrase>", "issue": "<problem>", "suggestion": "<fix>"}},
     ...2–4 items max...
@@ -669,6 +661,20 @@ def index():
     return send_from_directory("templates", "index.html")
 
 
+_rubric_store: dict = {}
+
+
+@app.route("/api/store-rubric", methods=["POST"])
+def store_rubric():
+    """Store a custom rubric server-side and return a short key."""
+    rubric = (request.json or {}).get("rubric", "").strip()
+    if not rubric:
+        return jsonify({"error": "rubric is required"}), 400
+    key = str(uuid.uuid4())
+    _rubric_store[key] = rubric
+    return jsonify({"key": key})
+
+
 @app.route("/api/upload-task-image", methods=["POST"])
 def upload_task_image():
     file = request.files.get("image")
@@ -693,7 +699,8 @@ def grade_stream():
     course_id       = request.args.get("course_id", "").strip()
     assignment_id   = request.args.get("assignment_id", "").strip()
     total_points    = int(request.args.get("total_points", 36))
-    rubric_text     = request.args.get("rubric", RUBRIC).strip() or RUBRIC
+    rubric_key      = request.args.get("rubric_key", "").strip()
+    rubric_text     = _rubric_store.get(rubric_key) or request.args.get("rubric", "").strip() or RUBRIC
     section_id      = request.args.get("section_id", "").strip() or None
     task_type       = request.args.get("task_type", "task2").strip() or "task2"
     essay_topic     = request.args.get("essay_topic", "").strip()
@@ -979,4 +986,4 @@ def post_gdoc_comments_route():
 
 if __name__ == "__main__":
     print("🎓  Canvas Grader running at http://localhost:5000")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', debug=True, port=5000)
