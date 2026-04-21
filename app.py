@@ -536,6 +536,50 @@ def append_gdoc_feedback(doc_id, overall_feedback, breakdown, criterion_comments
 _task_images: dict = {}
 
 
+def _build_task_prompt(task_type: str, task_label: str, total_points: int) -> str:
+    """Return the task-specific grading criteria + JSON schema block."""
+    criteria_heading = "TASK 1 — key criteria:" if task_type == "task1" else "TASK 2 — key criteria:"
+    if task_type == "task1":
+        criteria_body = (
+            "Task Achievement: overview present, all key features covered, data accurate, no opinion, more than 150 words.\n"
+            "Coherence: intro paraphrases task, body groups trends logically, cohesive devices varied.\n"
+            "Lexical: data-description verbs (peaked, fluctuated, rose sharply), no verb repetition.\n"
+            "Grammar: passives for reporting, comparatives correct, subject-verb agreement.\n"
+            'Flag: missing overview, data misread, listing every figure, copied prompt, "In my opinion".\n'
+        )
+    else:
+        criteria_body = (
+            "Task Response: all prompt parts addressed, clear position maintained, ideas developed with specific support, more than 250 words.\n"
+            "Coherence: 4-paragraph structure, topic sentence per paragraph, cohesive devices varied.\n"
+            "Lexical: topic vocabulary accurate, correct collocations, no informal language.\n"
+            "Grammar: mixed sentence types, correct tense/articles/agreement.\n"
+            "Flag: ignoring one part of the prompt, contradicting own position, weak examples, over-generalising.\n"
+        )
+    tr_label = "Task Achievement" if task_type == "task1" else "Task Response"
+    return (
+        f"TASK TYPE: {task_label}\n\n"
+        f"{criteria_heading}\n"
+        f"{criteria_body}\n"
+        f"Return ONLY valid JSON (no markdown, no explanation) with this exact shape:\n"
+        f"{{\n"
+        f'  "total_score": <int 0-{total_points}>,\n'
+        f'  "feedback": "<2-3 sentence overall summary>",\n'
+        f'  "{tr_label.lower().replace(" ", "_")}_score": <int>,\n'
+        f'  "{tr_label.lower().replace(" ", "_")}_justification": "<1-2 sentences>",\n'
+        f'  "{tr_label.lower().replace(" ", "_")}_inline": [{{"quote":"...","issue":"...","suggestion":"..."}}],\n'
+        f'  "coherence_cohesion_score": <int>,\n'
+        f'  "coherence_cohesion_justification": "<1-2 sentences>",\n'
+        f'  "coherence_cohesion_inline": [{{"quote":"...","issue":"...","suggestion":"..."}}],\n'
+        f'  "lexical_resource_score": <int>,\n'
+        f'  "lexical_resource_justification": "<1-2 sentences>",\n'
+        f'  "lexical_resource_inline": [{{"quote":"...","issue":"...","suggestion":"..."}}],\n'
+        f'  "grammatical_range_score": <int>,\n'
+        f'  "grammatical_range_justification": "<1-2 sentences>",\n'
+        f'  "grammatical_range_inline": [{{"quote":"...","issue":"...","suggestion":"..."}}]\n'
+        f"}}"
+    )
+
+
 def grade_with_claude(essay_text, total_points, rubric_text,
                       task_type="task2", essay_topic="",
                       image_data=None, image_media_type=None):
@@ -595,49 +639,7 @@ RUBRIC:
             },
             {
                 "type": "text",
-                "text": f"""TASK TYPE: {task_label}
-
-{"TASK 1 — key criteria:" if task_type == "task1" else "TASK 2 — key criteria:"}
-{"""Task Achievement: overview present, all key features covered, data accurate, no opinion, more than 150 words.
-Coherence: intro paraphrases task, body groups trends logically, cohesive devices varied.
-Lexical: data-description verbs (peaked, fluctuated, rose sharply), no verb repetition.
-Grammar: passives for reporting, comparatives correct, subject-verb agreement.
-Flag: missing overview, data misread, listing every figure, copied prompt, "In my opinion".
-""" if task_type == "task1" else """Task Response: all prompt parts addressed, clear position maintained, ideas developed with specific support, more than 250 words.
-Coherence: 4-paragraph structure, topic sentence per paragraph, cohesive devices varied.
-Lexical: topic vocabulary accurate, correct collocations, no informal language.
-Grammar: mixed sentence types, correct tense/articles/agreement.
-Flag: ignoring one part of the prompt, contradicting own position, weak examples, over-generalising.
-"""}
-Return ONLY valid JSON — no extra text. Use this exact structure:
-{{
-  "task_response_score":      <integer 0–9, scoring {'Task Achievement' if task_type == 'task1' else 'Task Response'}>,
-  "coherence_score":          <integer 0–9>,
-  "lexical_resource_score":   <integer 0–9>,
-  "grammar_score":            <integer 0–9>,
-  "total_score":              <integer 0–{total_points}>,
-  "task_response_comment":    "<1–2 sentence summary of {'Task Achievement' if task_type == 'task1' else 'Task Response'} performance>",
-  "task_response_inline": [
-    {{"quote": "<exact phrase>", "issue": "<problem>", "suggestion": "<fix>"}},
-    ...2–4 items max...
-  ],
-  "coherence_comment":        "<1–2 sentence summary of Coherence and Cohesion>",
-  "coherence_inline": [
-    {{"quote": "<exact phrase>", "issue": "<problem>", "suggestion": "<fix>"}},
-    ...2–4 items max...
-  ],
-  "lexical_resource_comment": "<1–2 sentence summary of Lexical Resource>",
-  "lexical_resource_inline": [
-    {{"quote": "<exact phrase>", "issue": "<problem>", "suggestion": "<fix>"}},
-    ...2–4 items max...
-  ],
-  "grammar_comment":          "<1–2 sentence summary of Grammar Range and Accuracy>",
-  "grammar_inline": [
-    {{"quote": "<exact phrase>", "issue": "<problem>", "suggestion": "<fix>"}},
-    ...2–4 items max...
-  ],
-  "feedback": "<2–3 sentence summary: what was done well + top 2 priorities to improve>"
-}}""",
+                "text": _build_task_prompt(task_type, task_label, total_points),
             },
         ],
         messages=[
