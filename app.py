@@ -598,12 +598,12 @@ RUBRIC:
                 "text": f"""TASK TYPE: {task_label}
 
 {"TASK 1 — key criteria:" if task_type == "task1" else "TASK 2 — key criteria:"}
-{"""Task Achievement: overview present, all key features covered, data accurate, no opinion, ≥150 words.
+{"""Task Achievement: overview present, all key features covered, data accurate, no opinion, more than 150 words.
 Coherence: intro paraphrases task, body groups trends logically, cohesive devices varied.
 Lexical: data-description verbs (peaked, fluctuated, rose sharply), no verb repetition.
 Grammar: passives for reporting, comparatives correct, subject-verb agreement.
 Flag: missing overview, data misread, listing every figure, copied prompt, "In my opinion".
-""" if task_type == "task1" else """Task Response: all prompt parts addressed, clear position maintained, ideas developed with specific support, ≥250 words.
+""" if task_type == "task1" else """Task Response: all prompt parts addressed, clear position maintained, ideas developed with specific support, more than 250 words.
 Coherence: 4-paragraph structure, topic sentence per paragraph, cohesive devices varied.
 Lexical: topic vocabulary accurate, correct collocations, no informal language.
 Grammar: mixed sentence types, correct tense/articles/agreement.
@@ -986,4 +986,4 @@ def post_gdoc_comments_route():
 
 if __name__ == "__main__":
     print("🎓  Canvas Grader running at http://localhost:5000")
-    app.run(host='0.0.0.0', debug=True, port=5000)
+    app.run(debug=True, port=5000)
