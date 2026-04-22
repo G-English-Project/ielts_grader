@@ -789,16 +789,28 @@ def grade_stream():
                         v = result.get(f"{key}_score")
                         if v is None and key == "task_response":
                             v = result.get("task_achievement_score")
+                        if v is None and key == "coherence":
+                            v = result.get("coherence_cohesion_score")
+                        if v is None and key == "grammar":
+                            v = result.get("grammatical_range_score")
                         return v or 0
                     def _comment(key):
                         v = result.get(f"{key}_comment", "")
                         if not v and key == "task_response":
                             v = result.get("task_achievement_comment", "")
+                        if not v and key == "coherence":
+                            v = result.get("coherence_cohesion_justification", "")
+                        if not v and key == "grammar":
+                            v = result.get("grammatical_range_justification", "")
                         return v
                     def _inline_raw(key):
                         v = result.get(f"{key}_inline")
                         if not v and key == "task_response":
                             v = result.get("task_achievement_inline")
+                        if not v and key == "coherence":
+                            v = result.get("coherence_cohesion_inline")
+                        if not v and key == "grammar":
+                            v = result.get("grammatical_range_inline")
                         return v or []
                     criterion_scores   = {k: _score(k) for k in KEYS}
                     criterion_comments = {k: _comment(k) for k in KEYS}
