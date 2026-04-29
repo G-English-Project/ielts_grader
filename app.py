@@ -1,10 +1,11 @@
-from flask import Flask, render_template, jsonify, request, Response, send_from_directory
+from flask import Flask, render_template, jsonify, request, Response, send_from_directory, session, redirect, url_for
 import requests
 import re
 import json
 import os
 import uuid
 import base64
+import hashlib
 import anthropic
 from dotenv import load_dotenv
 from google.oauth2 import service_account
@@ -13,6 +14,40 @@ from googleapiclient.discovery import build
 load_dotenv(override=True)
 
 app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "canvas-grader-secret-2026")
+
+LOGIN_USERNAME = "genglish"
+LOGIN_PASSWORD_HASH = hashlib.sha256("genglish@phuyen@2026".encode()).hexdigest()
+
+
+@app.before_request
+def require_login():
+    if request.endpoint in ("login", "static"):
+        return
+    if not session.get("logged_in"):
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Unauthorized"}), 401
+        return redirect(url_for("login"))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        pw_hash = hashlib.sha256(password.encode()).hexdigest()
+        if username == LOGIN_USERNAME and pw_hash == LOGIN_PASSWORD_HASH:
+            session["logged_in"] = True
+            return redirect(url_for("index"))
+        error = "Invalid username or password."
+    return render_template("login.html", error=error)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 # ─────────────────────────────────────────────
 #  CREDENTIALS  (loaded from .env)
@@ -521,8 +556,7 @@ def append_gdoc_feedback(doc_id, overall_feedback, breakdown, criterion_comments
                     "endIndex":   end_index + end,
                 },
                 "textStyle": style,
-                "fields":    fields,
-            }
+                "fields":    fields,            }
         })
 
     docs_service.documents().batchUpdate(
