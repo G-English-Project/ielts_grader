@@ -1,18 +1,55 @@
-from flask import Flask, render_template, jsonify, request, Response, send_from_directory
+from flask import Flask, render_template, jsonify, request, Response, send_from_directory, session, redirect, url_for
 import requests
 import re
 import json
 import os
 import uuid
 import base64
+import hashlib
 import anthropic
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+import traceback
+import speaking_grader
 
 load_dotenv(override=True)
 
 app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "canvas-grader-secret-2026")
+
+LOGIN_USERNAME = os.getenv("LOGIN_USERNAME", "genglish")
+LOGIN_PASSWORD_HASH = hashlib.sha256(os.getenv("LOGIN_PASSWORD", "").encode()).hexdigest()
+
+
+@app.before_request
+def require_login():
+    if request.endpoint in ("login", "static"):
+        return
+    if not session.get("logged_in"):
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Unauthorized"}), 401
+        return redirect(url_for("login"))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        pw_hash = hashlib.sha256(password.encode()).hexdigest()
+        if username == LOGIN_USERNAME and pw_hash == LOGIN_PASSWORD_HASH:
+            session["logged_in"] = True
+            return redirect(url_for("index"))
+        error = "Invalid username or password."
+    return render_template("login.html", error=error)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 # ─────────────────────────────────────────────
 #  CREDENTIALS  (loaded from .env)
@@ -21,6 +58,13 @@ CANVAS_API_TOKEN              = os.getenv("CANVAS_API_TOKEN")
 CANVAS_DOMAIN                 = "canvas.instructure.com"
 ANTHROPIC_API_KEY             = os.getenv("ANTHROPIC_API_KEY")
 GOOGLE_SERVICE_ACCOUNT_JSON   = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
+
+def canvas_headers():
+    return {
+        "Authorization": f"Bearer {CANVAS_API_TOKEN}",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+    }
 
 # ─────────────────────────────────────────────
 #  RUBRIC  (edit this to change grading criteria)
@@ -181,7 +225,7 @@ def get_canvas_sections(course_id, assignment_id=None):
     section have a submitted (non-unsubmitted) submission for that assignment,
     so the UI can warn when a section has no submissions.
     """
-    headers = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
+    headers = canvas_headers()
 
     # 1. Fetch all sections
     url = f"https://{CANVAS_DOMAIN}/api/v1/courses/{course_id}/sections"
@@ -247,7 +291,7 @@ def get_canvas_sections(course_id, assignment_id=None):
 def _get_section_student_ids(section_id):
     """Return the list of active student user_ids enrolled in a section."""
     url = f"https://{CANVAS_DOMAIN}/api/v1/sections/{section_id}/enrollments"
-    headers = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
+    headers = canvas_headers()
     student_ids = []
     params = {"type[]": "StudentEnrollment", "state[]": "active", "per_page": 100}
 
@@ -273,7 +317,7 @@ def get_canvas_submissions(course_id, assignment_id, section_id=None):
     to only students enrolled in that section. (Canvas does not reliably
     support student_ids[] filtering or the section submissions endpoint.)
     """
-    headers = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
+    headers = canvas_headers()
     url = f"https://{CANVAS_DOMAIN}/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions"
     params = {"include[]": "user", "per_page": 100}
     all_subs = []
@@ -348,7 +392,7 @@ def get_rubric_criteria(course_id, assignment_id):
     }
     """
     url = f"https://{CANVAS_DOMAIN}/api/v1/courses/{course_id}/assignments/{assignment_id}"
-    headers = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
+    headers = canvas_headers()
     resp = requests.get(url, headers=headers, timeout=20)
     resp.raise_for_status()
     rubric = resp.json().get("rubric", [])
@@ -521,8 +565,7 @@ def append_gdoc_feedback(doc_id, overall_feedback, breakdown, criterion_comments
                     "endIndex":   end_index + end,
                 },
                 "textStyle": style,
-                "fields":    fields,
-            }
+                "fields":    fields,            }
         })
 
     docs_service.documents().batchUpdate(
@@ -857,7 +900,7 @@ def canvas_assignments():
         return jsonify({"error": "course_id is required"}), 400
     try:
         url = f"https://{CANVAS_DOMAIN}/api/v1/courses/{course_id}/assignments"
-        headers = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
+        headers = canvas_headers()
         all_assignments = []
         params = {"per_page": 100, "order_by": "due_at"}
         while url:
@@ -899,6 +942,33 @@ def canvas_sections():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/canvas-submissions")
+def canvas_submissions_list():
+    """Return submissions (with student name + body) for a section, used by the speaking grader."""
+    course_id     = request.args.get("course_id", "").strip()
+    assignment_id = request.args.get("assignment_id", "").strip()
+    section_id    = request.args.get("section_id", "").strip() or None
+    if not (course_id and assignment_id):
+        return jsonify({"error": "course_id and assignment_id are required"}), 400
+    try:
+        subs = get_canvas_submissions(course_id, assignment_id, section_id)
+        result = [
+            {
+                "student_id":     str(s.get("user_id", "")),
+                "name":           (s.get("user") or {}).get("name", ""),
+                "submitted_at":   s.get("submitted_at"),
+                "submission_type": s.get("submission_type"),
+                "body":           s.get("body") or "",
+                "workflow_state": s.get("workflow_state"),
+            }
+            for s in subs
+            if s.get("workflow_state") != "unsubmitted"
+        ]
+        return jsonify({"submissions": result})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/rubric-criteria")
 def rubric_criteria():
     """Return the Canvas rubric criterion IDs + rating IDs for an assignment."""
@@ -920,7 +990,7 @@ def submit_grades():
     course_id     = body.get("course_id", "")
     assignment_id = body.get("assignment_id", "")
 
-    headers = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
+    headers = canvas_headers()
     results = []
 
     # Fetch criterion IDs + rating maps once for the whole batch
@@ -996,6 +1066,193 @@ def post_gdoc_comments_route():
     posted = sum(1 for r in results if r["success"])
     return jsonify({"posted": posted, "total": len(results), "results": results})
 
+
+
+@app.route("/speaking")
+def speaking_page():
+    return render_template("speaking.html")
+
+
+@app.route("/api/grade-speaking-stream")
+def grade_speaking_stream():
+    """SSE stream: download → convert → transcribe → grade one student's speaking submission."""
+    course_id     = request.args.get("course_id", "").strip()
+    assignment_id = request.args.get("assignment_id", "").strip()
+    student_id    = request.args.get("student_id", "").strip()
+    topic         = request.args.get("topic", "").strip()
+
+    def generate():
+        def msg(type_, **kw):
+            return f"data: {json.dumps({'type': type_, **kw})}\n\n"
+
+        if not (course_id and assignment_id and student_id):
+            yield msg("error", message="course_id, assignment_id and student_id are required")
+            return
+
+        step = "init"
+        try:
+            # 1. Fetch submission
+            step = "fetch submission"
+            yield msg("progress", message="Fetching submission from Canvas…")
+            headers = canvas_headers()
+            sub_url = (
+                f"https://{CANVAS_DOMAIN}/api/v1/courses/{course_id}"
+                f"/assignments/{assignment_id}/submissions/{student_id}"
+            )
+            resp = requests.get(sub_url, headers=headers,
+                                params={"include[]": "user"}, timeout=20)
+            resp.raise_for_status()
+            submission = resp.json()
+            student_name = (submission.get("user") or {}).get("name") or f"Student {student_id}"
+            print(f"[speaking] submission body snippet: {str(submission.get('body',''))[:200]}")
+
+            # 2. Resolve all audio sources in the submission
+            step = "resolve audio url"
+            yield msg("progress", message="Resolving audio source(s)…")
+            sources = speaking_grader.resolve_audio_urls(submission, CANVAS_API_TOKEN)
+            yield msg("progress", message=f"Found {len(sources)} audio source(s). Extracting…")
+            for i, (url, ext) in enumerate(sources):
+                print(f"[speaking] source {i+1}: {url[:100]}… ({ext})")
+
+            # 3. Extract & concatenate audio via ffmpeg (no full video download)
+            step = "extract audio"
+            ogg_bytes = speaking_grader.extract_audio_ogg(sources)
+            yield msg("progress", message=f"Audio extracted: {len(ogg_bytes) // 1024} KB OGG ({len(sources)} part(s))")
+
+            # 4. Transcribe
+            step = "transcribe"
+            yield msg("progress", message="Transcribing with Google Speech-to-Text… (may take 30–60 s)")
+            transcript, words = speaking_grader.transcribe_audio(ogg_bytes)
+            if not transcript:
+                yield msg("error", message="Transcription returned empty — check audio quality")
+                return
+            yield msg("progress", message=f"Transcript ready: {len(transcript.split())} words")
+            print(f"[speaking] transcript snippet: {transcript[:300]}")
+
+            # 5. Metrics
+            step = "compute metrics"
+            metrics = speaking_grader.compute_metrics(transcript, words)
+            print(f"[speaking] metrics: {metrics}")
+
+            # 6. Grade
+            step = "grade with Claude"
+            yield msg("progress", message="Grading with Claude…")
+            grading = speaking_grader.grade_with_claude(transcript, metrics, topic)
+            print(f"[speaking] grading keys: {list(grading.keys())}")
+
+            # 7. Fetch rubric
+            step = "fetch rubric"
+            criteria = speaking_grader.get_speaking_rubric_criteria(
+                course_id, assignment_id, CANVAS_API_TOKEN
+            )
+            print(f"[speaking] criteria keys: {list(criteria.keys())}")
+
+            # Build result
+            CRIT_KEYS = ["fluency", "lexical_resource", "grammar", "pronunciation"]
+            bands    = {k: grading[k]["band"]     for k in CRIT_KEYS if k in grading}
+            comments = {k: grading[k]["comments"] for k in CRIT_KEYS if k in grading}
+            overall_comments = grading.get("overall_comments", "")
+
+            yield msg(
+                "result",
+                student_id=student_id,
+                student_name=student_name,
+                transcript=transcript,
+                metrics=metrics,
+                bands=bands,
+                comments=comments,
+                overall_comments=overall_comments,
+                annotations=grading.get("annotations", []),
+                criteria=criteria,
+                course_id=course_id,
+                assignment_id=assignment_id,
+            )
+
+        except Exception as e:
+            tb = traceback.format_exc()
+            print(f"[speaking] ERROR at step '{step}':\n{tb}")
+            yield msg("error", message=f"[{step}] {e}")
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.route("/api/submit-speaking-grade", methods=["POST"])
+def submit_speaking_grade():
+    """POST rubric scores + band comments to Canvas for one student."""
+    body          = request.json
+    course_id     = body.get("course_id", "")
+    assignment_id = body.get("assignment_id", "")
+    student_id    = body.get("student_id", "")
+    bands         = body.get("bands", {})       # {"fluency": 7, "lexical_resource": 6, ...}
+    comments      = body.get("comments", {})    # {"fluency": "...", ...}
+    criteria      = body.get("criteria", {})    # from get_speaking_rubric_criteria()
+
+    if not (course_id and assignment_id and student_id):
+        return jsonify({"error": "course_id, assignment_id and student_id required"}), 400
+
+    headers = canvas_headers()
+    url = (
+        f"https://{CANVAS_DOMAIN}/api/v1/courses/{course_id}"
+        f"/assignments/{assignment_id}/submissions/{student_id}"
+    )
+
+    payload = {}
+    for key, info in criteria.items():
+        cid    = info["criterion_id"]
+        pts    = int(bands.get(key, 0))
+        rating = info["ratings"].get(pts, "")
+        comment = comments.get(key, "")
+        payload[f"rubric_assessment[{cid}][points]"]    = pts
+        payload[f"rubric_assessment[{cid}][rating_id]"] = rating
+        payload[f"rubric_assessment[{cid}][comments]"]  = comment
+
+    resp = requests.put(url, headers=headers, data=payload, timeout=20)
+    return jsonify({"success": resp.status_code == 200, "status_code": resp.status_code})
+
+
+@app.route("/api/create-speaking-report", methods=["POST"])
+def create_speaking_report():
+    """Write a speaking report into a Google Doc.
+
+    Pass existing_doc_id (or existing_doc_url) to write into a user-owned doc
+    (recommended — avoids service-account Drive quota issues).
+    Otherwise a new doc is created in REPORT_FOLDER_ID.
+    """
+    body             = request.json
+    students_data    = body.get("students", [])
+    title            = body.get("title", "Speaking Grading Report")
+    tab_title        = body.get("tab_title", "").strip()
+    existing_doc_url = body.get("existing_doc_url", "").strip()
+    existing_doc_id  = body.get("existing_doc_id", "").strip()
+
+    # Accept a full URL and extract the doc ID
+    if not existing_doc_id and existing_doc_url:
+        m = re.search(r"/document/d/([a-zA-Z0-9_-]+)", existing_doc_url)
+        if m:
+            existing_doc_id = m.group(1)
+
+    # Fall back to the shared report doc
+    if not existing_doc_id:
+        existing_doc_id = speaking_grader.REPORT_DOC_ID
+
+    if not students_data:
+        return jsonify({"error": "No student data provided"}), 400
+
+    try:
+        doc_url, doc_id = speaking_grader.create_speaking_report(
+            students_data, title,
+            existing_doc_id=existing_doc_id or None,
+            tab_title=tab_title or None,
+        )
+        return jsonify({"url": doc_url, "doc_id": doc_id})
+    except Exception as e:
+        tb = traceback.format_exc()
+        print(f"[report] ERROR:\n{tb}")
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

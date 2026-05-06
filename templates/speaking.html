@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title id="page-title">Speaking Grader — Canvas</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f0f4f8;
+      color: #1a202c;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #2b6cb0;
+      color: #fff;
+      padding: .85rem 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    header h1 { font-size: 1.1rem; font-weight: 700; }
+    header .sub { font-size: .78rem; opacity: .7; }
+    header nav { margin-left: auto; display: flex; gap: 1rem; }
+    header nav a { color: rgba(255,255,255,.8); font-size: .82rem; text-decoration: none; }
+    header nav a:hover { color: #fff; }
+
+    .container { max-width: 1000px; margin: 1.5rem auto; padding: 0 1rem; display: grid; gap: 1.1rem; }
+
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 1px 8px rgba(0,0,0,.08);
+      padding: 1.2rem 1.5rem;
+    }
+    .card-title {
+      font-size: .78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: #718096;
+      margin-bottom: .9rem;
+    }
+
+    /* ── Setup row ── */
+    .setup-row {
+      display: grid;
+      grid-template-columns: 160px 1fr 1fr 1fr;
+      gap: .75rem 1rem;
+      align-items: end;
+    }
+    @media(max-width:700px) { .setup-row { grid-template-columns: 1fr 1fr; } }
+
+    label {
+      display: block;
+      font-size: .76rem;
+      font-weight: 600;
+      color: #4a5568;
+      margin-bottom: .28rem;
+    }
+    input[type="text"], select {
+      width: 100%;
+      padding: .48rem .65rem;
+      border: 1px solid #cbd5e0;
+      border-radius: 6px;
+      font-size: .88rem;
+      color: #1a202c;
+      outline: none;
+      background: #fff;
+      transition: border-color .15s;
+    }
+    input:focus, select:focus {
+      border-color: #4299e1;
+      box-shadow: 0 0 0 3px rgba(66,153,225,.15);
+    }
+    input:disabled, select:disabled { background: #f7fafc; color: #a0aec0; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: .35rem;
+      padding: .5rem 1rem;
+      border: none;
+      border-radius: 6px;
+      font-size: .87rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, opacity .15s;
+      white-space: nowrap;
+    }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-blue   { background: #3182ce; color: #fff; }
+    .btn-blue:hover:not(:disabled)   { background: #2b6cb0; }
+    .btn-green  { background: #38a169; color: #fff; }
+    .btn-green:hover:not(:disabled)  { background: #2f855a; }
+    .btn-gray   { background: #e2e8f0; color: #4a5568; }
+    .btn-gray:hover:not(:disabled)   { background: #cbd5e0; }
+    .btn-sm { padding: .32rem .7rem; font-size: .78rem; }
+
+    /* ── Topic row ── */
+    .topic-row { display: flex; gap: .75rem; align-items: flex-end; }
+    .topic-row .topic-field { flex: 1; }
+
+    /* ── Students list ── */
+    .students-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .students-table th, .students-table td {
+      padding: .55rem .75rem;
+      border-bottom: 1px solid #e2e8f0;
+      font-size: .85rem;
+      vertical-align: middle;
+    }
+    .students-table th {
+      background: #f7fafc;
+      font-weight: 600;
+      font-size: .76rem;
+      color: #4a5568;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .students-table tr:last-child td { border-bottom: none; }
+    .students-table tr:hover td { background: #f7fafc; }
+
+    .status-badge {
+      display: inline-block;
+      padding: .18rem .55rem;
+      border-radius: 9999px;
+      font-size: .72rem;
+      font-weight: 600;
+    }
+    .badge-graded  { background: #c6f6d5; color: #276749; }
+    .badge-pending { background: #fefcbf; color: #744210; }
+    .badge-none    { background: #e2e8f0; color: #718096; }
+    .badge-error   { background: #fff5f5; color: #c53030; }
+
+    /* ── Progress log inline ── */
+    .log-cell { font-size: .78rem; color: #4a5568; max-width: 280px; }
+    .log-cell.err { color: #c53030; }
+    .log-cell.ok  { color: #276749; }
+
+    /* ── Result panel (collapsible per student) ── */
+    .result-panel {
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      margin: .6rem .75rem .6rem .75rem;
+      overflow: hidden;
+    }
+    .result-panel-header {
+      background: #f7fafc;
+      padding: .6rem 1rem;
+      font-size: .8rem;
+      font-weight: 600;
+      color: #4a5568;
+      display: flex;
+      align-items: center;
+      gap: .75rem;
+    }
+
+    /* ── Metrics ── */
+    .metrics-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .5rem;
+      padding: .75rem 1rem;
+    }
+    .metric-box {
+      background: #f7fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 7px;
+      padding: .45rem .75rem;
+      text-align: center;
+      min-width: 90px;
+    }
+    .metric-box .val { font-size: 1.2rem; font-weight: 700; color: #2b6cb0; line-height: 1.1; }
+    .metric-box .lbl { font-size: .68rem; color: #718096; margin-top: .15rem; }
+    .metric-box.warn .val { color: #c05621; }
+    .metric-box.good .val { color: #276749; }
+
+    .low-conf-wrap { padding: 0 1rem .75rem; }
+    .low-conf-list { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .3rem; }
+    .low-conf-tag {
+      background: #fff5f5;
+      border: 1px solid #fc8181;
+      color: #c53030;
+      border-radius: 4px;
+      padding: .12rem .4rem;
+      font-size: .72rem;
+    }
+
+    /* ── Transcript ── */
+    .transcript-box {
+      background: #f7fafc;
+      border-top: 1px solid #e2e8f0;
+      border-bottom: 1px solid #e2e8f0;
+      padding: .75rem 1rem;
+      font-size: .82rem;
+      line-height: 1.6;
+      max-height: 160px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      color: #2d3748;
+    }
+
+    /* ── Criteria rows ── */
+    .criteria-section { padding: .75rem 1rem; }
+    .criterion-row {
+      display: grid;
+      grid-template-columns: 180px 80px 1fr;
+      gap: .5rem .75rem;
+      align-items: start;
+      padding: .5rem 0;
+      border-bottom: 1px solid #f0f4f8;
+    }
+    .criterion-row:last-child { border-bottom: none; }
+    .crit-name { font-size: .83rem; font-weight: 600; padding-top: .35rem; }
+    select.band-sel { width: 68px; padding: .3rem .4rem; font-size: .88rem; }
+    textarea.comment-ta {
+      width: 100%;
+      min-height: 68px;
+      padding: .4rem .55rem;
+      border: 1px solid #cbd5e0;
+      border-radius: 6px;
+      font-size: .8rem;
+      line-height: 1.5;
+      resize: vertical;
+      font-family: inherit;
+    }
+    textarea.comment-ta:focus { outline: none; border-color: #4299e1; box-shadow: 0 0 0 3px rgba(66,153,225,.15); }
+
+    .post-row {
+      padding: .75rem 1rem;
+      border-top: 1px solid #e2e8f0;
+      display: flex;
+      align-items: center;
+      gap: .75rem;
+    }
+    .banner {
+      border-radius: 6px;
+      padding: .45rem .85rem;
+      font-size: .82rem;
+      font-weight: 600;
+    }
+    .banner.success { background: #f0fff4; border: 1px solid #68d391; color: #276749; }
+    .banner.error   { background: #fff5f5; border: 1px solid #fc8181; color: #c53030; }
+
+    .spinner {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid #cbd5e0;
+      border-top-color: #3182ce;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Speaking Grader</h1>
+  <span class="sub">IELTS Bands 4–9 &nbsp;·&nbsp; Google S2T + Claude</span>
+  <nav>
+    <a href="/">Writing Grader</a>
+    <a href="/logout">Log out</a>
+  </nav>
+</header>
+
+<div class="container">
+
+  <!-- ── Setup card ── -->
+  <div class="card">
+    <div class="card-title">Setup</div>
+
+    <div class="setup-row">
+      <!-- Course ID -->
+      <div>
+        <label>Course ID</label>
+        <input type="text" id="course_id" placeholder="e.g. 10558998"
+               oninput="onCourseInput()" />
+      </div>
+
+      <!-- Assignment -->
+      <div>
+        <label>Assignment</label>
+        <div style="display:flex;gap:.4rem">
+          <select id="assignment_sel" disabled onchange="onAssignmentChange()">
+            <option value="">— enter course ID —</option>
+          </select>
+        </div>
+        <input type="text" id="assignment_manual" placeholder="or type ID manually"
+               style="margin-top:.35rem" oninput="onManualAssignment()" />
+      </div>
+
+      <!-- Section -->
+      <div>
+        <label>Section</label>
+        <select id="section_sel" disabled onchange="onSectionChange()">
+          <option value="">— select assignment first —</option>
+        </select>
+        <input type="text" id="section_manual" placeholder="or type section ID manually"
+               style="margin-top:.35rem" oninput="onManualSection()" />
+      </div>
+
+      <!-- Topic -->
+      <div>
+        <label>Topic <span style="font-weight:400;color:#a0aec0">(optional)</span></label>
+        <input type="text" id="topic" placeholder="e.g. IELTS Speaking Part 2 – Describe a friend" />
+      </div>
+    </div>
+
+    <div style="margin-top:.9rem;display:flex;gap:.75rem;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-blue" id="loadBtn" onclick="loadStudents()" disabled>
+        Load Students
+      </button>
+      <span id="setup-status" style="font-size:.8rem;color:#718096"></span>
+    </div>
+
+  </div>
+
+  <!-- ── Students card ── -->
+  <div class="card" id="students-card" style="display:none">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.9rem;flex-wrap:wrap;gap:.5rem">
+      <div class="card-title" style="margin:0">Students</div>
+      <div style="display:flex;gap:.5rem;align-items:center;">
+        <button class="btn btn-blue btn-sm" onclick="gradeAll()" id="gradeAllBtn">
+          Grade All
+        </button>
+        <button class="btn btn-green btn-sm" onclick="createReport()" id="reportBtn" style="display:none">
+          📄 Create Google Doc Report
+        </button>
+        <span id="report-status" style="font-size:.78rem;color:#4a5568;"></span>
+      </div>
+    </div>
+    <table class="students-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Name</th>
+          <th>Submission</th>
+          <th>Status</th>
+          <th>Log</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="students-tbody"></tbody>
+    </table>
+  </div>
+
+</div><!-- /container -->
+
+<script>
+const CRITERIA_KEYS   = ["fluency", "lexical_resource", "grammar", "pronunciation"];
+const CRITERIA_LABELS = {
+  fluency:          "Fluency & Coherence",
+  lexical_resource: "Lexical Resource",
+  grammar:          "Grammar Range & Accuracy",
+  pronunciation:    "Pronunciation",
+};
+const BAND_OPTS = [4,5,6,7,8,9];
+
+// State
+let assignments   = [];
+let sections      = [];
+let students      = [];   // [{student_id, name, submitted_at, submission_type, body}]
+let activeStreams  = {}; // student_id → EventSource
+let gradedResults = {}; // student_id → {name, transcript, bands, comments}
+
+// ── Setup helpers ──────────────────────────────────────────────
+
+function setStatus(msg, err) {
+  const el = document.getElementById("setup-status");
+  el.textContent = msg;
+  el.style.color = err ? "#c53030" : "#718096";
+}
+
+function courseId()     { return document.getElementById("course_id").value.trim(); }
+function assignmentId() {
+  return document.getElementById("assignment_manual").value.trim()
+      || document.getElementById("assignment_sel").value;
+}
+function sectionId() {
+  return document.getElementById("section_manual").value.trim()
+      || document.getElementById("section_sel").value;
+}
+
+function checkLoadReady() {
+  const ready = courseId() && assignmentId() && sectionId();
+  document.getElementById("loadBtn").disabled = !ready;
+}
+
+// ── Course ID entered ──────────────────────────────────────────
+
+let _assignFetch = null;
+function onCourseInput() {
+  const cid = courseId();
+  const asel = document.getElementById("assignment_sel");
+  asel.innerHTML = '<option value="">— loading… —</option>';
+  asel.disabled = true;
+  document.getElementById("section_sel").innerHTML = '<option value="">— select assignment first —</option>';
+  document.getElementById("section_sel").disabled = true;
+  checkLoadReady();
+  if (!cid) return;
+
+  clearTimeout(_assignFetch);
+  _assignFetch = setTimeout(async () => {
+    setStatus("Loading assignments…");
+    try {
+      const r = await fetch(`/api/canvas-assignments?course_id=${encodeURIComponent(cid)}`);
+      const d = await r.json();
+      if (d.error) { setStatus("Error: " + d.error, true); return; }
+      assignments = d.assignments || [];
+      asel.innerHTML = '<option value="">— select assignment —</option>'
+        + assignments.map(a => {
+            const pts = a.points_possible ? ` (${a.points_possible}pts)` : "";
+            return `<option value="${a.id}">${a.name}${pts}</option>`;
+          }).join("");
+      asel.disabled = false;
+      setStatus(`${assignments.length} assignment(s) loaded`);
+    } catch(e) { setStatus("Failed to load assignments: " + e.message, true); }
+  }, 500);
+}
+
+// ── Assignment selected ────────────────────────────────────────
+
+async function onAssignmentChange() {
+  document.getElementById("assignment_manual").value = "";
+  const cid = courseId();
+  const aid = document.getElementById("assignment_sel").value;
+  if (!cid || !aid) { checkLoadReady(); return; }
+  await loadSections(cid, aid);
+}
+
+async function onManualAssignment() {
+  document.getElementById("assignment_sel").value = "";
+  const cid = courseId();
+  const aid = document.getElementById("assignment_manual").value.trim();
+  if (!cid || !aid) { checkLoadReady(); return; }
+  await loadSections(cid, aid);
+}
+
+async function loadSections(cid, aid) {
+  const ssel = document.getElementById("section_sel");
+  ssel.innerHTML = '<option value="">— loading… —</option>';
+  ssel.disabled = true;
+  setStatus("Loading sections…");
+  checkLoadReady();
+  try {
+    const r = await fetch(`/api/canvas-sections?course_id=${encodeURIComponent(cid)}&assignment_id=${encodeURIComponent(aid)}`);
+    const d = await r.json();
+    if (d.error) { setStatus("Error: " + d.error, true); return; }
+    sections = d.sections || [];
+    ssel.innerHTML = '<option value="">— select section —</option>'
+      + sections.map(s => {
+          const count = s.submission_count != null ? ` · ${s.submission_count}/${s.total_students} submitted` : "";
+          return `<option value="${s.id}">${s.name}${count}</option>`;
+        }).join("");
+    ssel.disabled = false;
+    setStatus(`${sections.length} section(s) loaded`);
+  } catch(e) { setStatus("Failed to load sections: " + e.message, true); }
+  checkLoadReady();
+}
+
+function onSectionChange() {
+  document.getElementById("section_manual").value = "";
+  checkLoadReady();
+}
+function onManualSection() {
+  document.getElementById("section_sel").value = "";
+  checkLoadReady();
+}
+
+// ── Load students in section ───────────────────────────────────
+
+async function loadStudents() {
+  const cid = courseId();
+  const aid = assignmentId();
+  const sid = sectionId();
+  if (!cid || !aid || !sid) return;
+
+  setStatus("Fetching submissions…");
+  document.getElementById("students-card").style.display = "none";
+  document.getElementById("loadBtn").disabled = true;
+
+  try {
+    // Use the existing submissions endpoint
+    const r = await fetch(
+      `/api/canvas-submissions?course_id=${encodeURIComponent(cid)}`
+      + `&assignment_id=${encodeURIComponent(aid)}`
+      + `&section_id=${encodeURIComponent(sid)}`
+    );
+    const d = await r.json();
+    if (d.error) { setStatus("Error: " + d.error, true); document.getElementById("loadBtn").disabled = false; return; }
+    students = d.submissions || [];
+    renderStudentsTable(cid, aid);
+    setStatus(`${students.length} submission(s) found`);
+
+    // Update browser tab to assignment name
+    const asel = document.getElementById("assignment_sel");
+    const aName = document.getElementById("assignment_manual").value.trim()
+               || asel.options[asel.selectedIndex]?.text
+               || aid;
+    document.title = aName || "Speaking Grader";
+  } catch(e) {
+    setStatus("Failed: " + e.message, true);
+  }
+  document.getElementById("loadBtn").disabled = false;
+}
+
+function renderStudentsTable(cid, aid) {
+  const tbody = document.getElementById("students-tbody");
+  tbody.innerHTML = "";
+
+  if (students.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#a0aec0;padding:1rem">No submissions found</td></tr>';
+    document.getElementById("students-card").style.display = "";
+    return;
+  }
+
+  students.forEach((s, idx) => {
+    const hasVideo = hasAudioSource(s.body || "");
+    const submittedAt = s.submitted_at ? new Date(s.submitted_at).toLocaleDateString() : "—";
+    const tr = document.createElement("tr");
+    tr.id = `row-${s.student_id}`;
+    tr.innerHTML = `
+      <td style="color:#a0aec0;font-size:.78rem">${idx+1}</td>
+      <td style="font-weight:600">${s.name || s.student_id}</td>
+      <td style="font-size:.78rem;color:#718096">${submittedAt}</td>
+      <td><span id="badge-${s.student_id}" class="status-badge ${hasVideo?'badge-pending':'badge-none'}">${hasVideo?'Has video':'No video'}</span></td>
+      <td><span class="log-cell" id="log-${s.student_id}"></span></td>
+      <td style="text-align:right">
+        <button class="btn btn-blue btn-sm" id="gradeBtn-${s.student_id}"
+                onclick="gradeStudent('${s.student_id}','${cid}','${aid}')"
+                ${hasVideo?'':'disabled'}>
+          Grade
+        </button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  document.getElementById("students-card").style.display = "";
+}
+
+function hasAudioSource(body) {
+  return /media_attachments_iframe/.test(body)
+      || /drive\.google\.com\/file\/d\//.test(body);
+}
+
+// ── Grade single student ───────────────────────────────────────
+
+function gradeStudent(studentId, cid, aid) {
+  const topic = document.getElementById("topic").value.trim();
+  if (activeStreams[studentId]) { activeStreams[studentId].close(); }
+
+  setBadge(studentId, "pending", "Grading…");
+  setLog(studentId, "Starting…");
+  document.getElementById(`gradeBtn-${studentId}`).disabled = true;
+
+  // Remove any existing result panel
+  const existingPanel = document.getElementById(`panel-${studentId}`);
+  if (existingPanel) existingPanel.remove();
+
+  const params = new URLSearchParams({ course_id: cid, assignment_id: aid, student_id: studentId, topic });
+  const es = new EventSource(`/api/grade-speaking-stream?${params}`);
+  activeStreams[studentId] = es;
+
+  es.onmessage = (e) => {
+    let d;
+    try { d = JSON.parse(e.data); } catch { return; }
+
+    if (d.type === "progress" || d.type === "info") {
+      setLog(studentId, d.message);
+    } else if (d.type === "error") {
+      setBadge(studentId, "error", "Error");
+      setLog(studentId, d.message, true);
+      document.getElementById(`gradeBtn-${studentId}`).disabled = false;
+      es.close();
+      delete activeStreams[studentId];
+    } else if (d.type === "result") {
+      es.close();
+      delete activeStreams[studentId];
+      setBadge(studentId, "graded", "Graded");
+      setLog(studentId, "Done ✓", false, true);
+      document.getElementById(`gradeBtn-${studentId}`).disabled = false;
+      insertResultPanel(studentId, d, cid, aid);
+      // Store for report — include submission metadata from students list
+      const stuMeta = students.find(s => s.student_id === studentId) || {};
+      gradedResults[studentId] = {
+        name:             d.student_name         || studentId,
+        transcript:       d.transcript           || "",
+        bands:            d.bands                || {},
+        comments:         d.comments             || {},
+        overall_comments: d.overall_comments     || "",
+        metrics:          d.metrics              || {},
+        annotations:      d.annotations          || [],
+        submitted_at:     stuMeta.submitted_at   || "",
+        submission_type:  stuMeta.submission_type || "",
+        topic:            document.getElementById("topic").value.trim(),
+      };
+      document.getElementById("reportBtn").style.display = "";
+    }
+  };
+
+  es.onerror = () => {
+    setBadge(studentId, "error", "Error");
+    setLog(studentId, "Connection error", true);
+    document.getElementById(`gradeBtn-${studentId}`).disabled = false;
+    es.close();
+    delete activeStreams[studentId];
+  };
+}
+
+// ── Grade All ─────────────────────────────────────────────────
+
+async function gradeAll() {
+  const cid = courseId();
+  const aid = assignmentId();
+  const eligible = students.filter(s => hasAudioSource(s.body || ""));
+  document.getElementById("gradeAllBtn").disabled = true;
+
+  for (const s of eligible) {
+    gradeStudent(s.student_id, cid, aid);
+    // Stagger to avoid hammering S2T simultaneously
+    await new Promise(r => setTimeout(r, 3000));
+  }
+
+  document.getElementById("gradeAllBtn").disabled = false;
+}
+
+// ── Result panel ───────────────────────────────────────────────
+
+function insertResultPanel(studentId, d, cid, aid) {
+  const row = document.getElementById(`row-${studentId}`);
+  if (!row) return;
+
+  const m = d.metrics || {};
+
+  // Low-conf words markup
+  const lcWords = m.low_conf_words || [];
+  const lcHtml = lcWords.length
+    ? `<div class="low-conf-wrap">
+         <label>Low-confidence words (likely mispronounced)</label>
+         <div class="low-conf-list">
+           ${lcWords.map(w => `<span class="low-conf-tag">${w.word} <em>${w.confidence}</em></span>`).join("")}
+         </div>
+       </div>`
+    : "";
+
+  // Criteria rows
+  const criteriaHtml = CRITERIA_KEYS.map(key => {
+    const band    = (d.bands    || {})[key] || 6;
+    const comment = (d.comments || {})[key] || "";
+    return `
+      <div class="criterion-row">
+        <div class="crit-name">${CRITERIA_LABELS[key]}</div>
+        <div>
+          <select class="band-sel" id="band-${studentId}-${key}">
+            ${BAND_OPTS.map(b => `<option value="${b}" ${b==band?'selected':''}>${b}</option>`).join("")}
+          </select>
+        </div>
+        <div>
+          <textarea class="comment-ta" id="comment-${studentId}-${key}">${comment}</textarea>
+        </div>
+      </div>`;
+  }).join("");
+
+  const tr = document.createElement("tr");
+  tr.id = `panel-${studentId}`;
+  tr.innerHTML = `
+    <td colspan="6" style="padding:0">
+      <div class="result-panel">
+        <div class="result-panel-header">
+          <span>${d.student_name || studentId}</span>
+          <span style="color:#a0aec0;font-weight:400">
+            ${m.wpm||'?'} WPM &nbsp;·&nbsp;
+            ${m.filler_count||0} fillers &nbsp;·&nbsp;
+            ${m.intelligibility_pct||'?'}% intelligibility
+          </span>
+        </div>
+
+        <!-- Metrics -->
+        <div class="metrics-grid">${buildMetricBoxes(m)}</div>
+        ${lcHtml}
+
+        <!-- Transcript -->
+        <div style="padding:.1rem 1rem .3rem;font-size:.75rem;font-weight:600;color:#718096;text-transform:uppercase;letter-spacing:.04em">Transcript</div>
+        <div class="transcript-box">${escHtml(d.transcript||'')}</div>
+
+        <!-- Criteria -->
+        <div class="criteria-section">${criteriaHtml}</div>
+
+        <!-- Overall Comments -->
+        <div class="criteria-section" style="border-top:1px solid #e2e8f0;padding-top:.75rem">
+          <div style="font-size:.75rem;font-weight:600;color:#718096;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.4rem">Overall Comments</div>
+          <textarea class="comment-ta" id="overall-${studentId}" style="min-height:72px">${escHtml(d.overall_comments||'')}</textarea>
+        </div>
+
+        <!-- Post row -->
+        <div class="post-row">
+          <button class="btn btn-green btn-sm" id="docBtn-${studentId}"
+                  onclick="saveStudentDoc('${studentId}','${cid}','${aid}')">
+            📄 Save to Google Doc
+          </button>
+          <button class="btn btn-gray btn-sm" id="canvasBtn-${studentId}"
+                  onclick="submitGrade('${studentId}','${cid}','${aid}')">
+            Post to Canvas
+          </button>
+          <div id="post-status-${studentId}"></div>
+        </div>
+      </div>
+    </td>`;
+
+  row.after(tr);
+
+  // Store criteria map for submit
+  tr.dataset.criteria  = JSON.stringify(d.criteria || {});
+  tr.dataset.studentId = studentId;
+}
+
+function buildMetricBoxes(m) {
+  const defs = [
+    { key:"wpm",               label:"Words/min",      warn:v=>v<100||v>170, good:v=>v>=110&&v<=155 },
+    { key:"filler_count",      label:"Fillers (uh/um)", warn:v=>v>10,         good:v=>v<=3 },
+    { key:"pause_count",       label:"Long pauses",    warn:v=>v>8,           good:v=>v<=3 },
+    { key:"avg_pause_secs",    label:"Avg pause (s)",  warn:v=>v>1.0 },
+    { key:"word_count",        label:"Total words" },
+    { key:"duration_secs",     label:"Duration (s)" },
+    { key:"intelligibility_pct", label:"Intelligibility %", warn:v=>v<80, good:v=>v>=92, suffix:"%" },
+  ];
+  return defs.filter(d => m[d.key] !== undefined).map(d => {
+    const val = m[d.key];
+    const cls = d.warn&&d.warn(val) ? "warn" : (d.good&&d.good(val) ? "good" : "");
+    return `<div class="metric-box ${cls}">
+      <div class="val">${val}${d.suffix||""}</div>
+      <div class="lbl">${d.label}</div>
+    </div>`;
+  }).join("");
+}
+
+// ── Save individual student Google Doc ────────────────────────
+
+async function saveStudentDoc(studentId, cid, aid) {
+  const panelRow = document.getElementById(`panel-${studentId}`);
+  if (!panelRow) return;
+
+  const r = gradedResults[studentId] || {};
+  const bands = {}, comments = {};
+  for (const key of CRITERIA_KEYS) {
+    const bandEl    = document.getElementById(`band-${studentId}-${key}`);
+    const commentEl = document.getElementById(`comment-${studentId}-${key}`);
+    bands[key]    = bandEl    ? parseInt(bandEl.value)    : (r.bands[key]    || 0);
+    comments[key] = commentEl ? commentEl.value.trim()    : (r.comments[key] || "");
+  }
+  const overallEl = document.getElementById(`overall-${studentId}`);
+  const overall_comments = overallEl ? overallEl.value.trim() : (r.overall_comments || "");
+
+  const assignSel   = document.getElementById("assignment_sel");
+  const assignName  = assignSel.options[assignSel.selectedIndex]?.text || assignmentId() || "Assignment";
+  const date        = new Date().toLocaleDateString("en-GB");
+  const title       = `Speaking — ${r.name || studentId} — ${assignName} — ${date}`;
+
+  const assignSel2  = document.getElementById("assignment_sel");
+  const assignName2 = document.getElementById("assignment_manual").value.trim()
+                   || assignSel2.options[assignSel2.selectedIndex]?.text || "";
+  const tab_title   = assignName2.replace(/\s*\([\d.]+pts?\)\s*$/i, "").trim();
+  const btn = document.getElementById(`docBtn-${studentId}`);
+  const statusEl = document.getElementById(`post-status-${studentId}`);
+  btn.disabled = true;
+  statusEl.innerHTML = '<span class="spinner"></span> Saving to doc…';
+
+  try {
+    const resp = await fetch("/api/create-speaking-report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        students: [{
+          name: r.name, transcript: r.transcript, bands, comments, overall_comments,
+          metrics: r.metrics || {},
+          annotations: r.annotations || [],
+          submitted_at: r.submitted_at || "", submission_type: r.submission_type || "",
+          topic: r.topic || "",
+        }],
+        title,
+        tab_title,
+      }),
+    });
+    const data = await resp.json();
+    if (data.error) {
+      statusEl.innerHTML = `<div class="banner error">${data.error}</div>`;
+    } else {
+      statusEl.innerHTML = `<a href="${data.url}" target="_blank" class="banner success" style="text-decoration:none">📄 Open Doc ↗</a>`;
+    }
+  } catch(e) {
+    statusEl.innerHTML = `<div class="banner error">${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ── Submit grade to Canvas ─────────────────────────────────────
+
+async function submitGrade(studentId, cid, aid) {
+  const panelRow = document.getElementById(`panel-${studentId}`);
+  if (!panelRow) return;
+  const criteria = JSON.parse(panelRow.dataset.criteria || "{}");
+
+  const bands = {}, comments = {};
+  for (const key of CRITERIA_KEYS) {
+    bands[key]    = parseInt(document.getElementById(`band-${studentId}-${key}`).value);
+    comments[key] = document.getElementById(`comment-${studentId}-${key}`).value.trim();
+  }
+
+  const statusEl = document.getElementById(`post-status-${studentId}`);
+  statusEl.innerHTML = '<span class="spinner"></span> Posting…';
+
+  try {
+    const r = await fetch("/api/submit-speaking-grade", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ course_id: cid, assignment_id: aid, student_id: studentId, bands, comments, criteria }),
+    });
+    const data = await r.json();
+    statusEl.innerHTML = data.success
+      ? '<div class="banner success">Posted to Canvas ✓</div>'
+      : `<div class="banner error">Canvas returned HTTP ${data.status_code}</div>`;
+    if (data.success) setBadge(studentId, "graded", "Posted ✓");
+  } catch(e) {
+    statusEl.innerHTML = `<div class="banner error">${e.message}</div>`;
+  }
+}
+
+// ── Utilities ──────────────────────────────────────────────────
+
+function setBadge(studentId, type, text) {
+  const el = document.getElementById(`badge-${studentId}`);
+  if (!el) return;
+  const map = { graded:"badge-graded", pending:"badge-pending", none:"badge-none", error:"badge-error" };
+  el.className = "status-badge " + (map[type] || "badge-none");
+  el.textContent = text;
+}
+
+function setLog(studentId, msg, isErr, isOk) {
+  const el = document.getElementById(`log-${studentId}`);
+  if (!el) return;
+  el.className = "log-cell" + (isErr?" err":isOk?" ok":"");
+  el.textContent = msg;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+// ── Create Google Doc Report ───────────────────────────────────
+
+async function createReport() {
+  const graded = Object.values(gradedResults);
+  if (!graded.length) return;
+
+  // Use latest band/comment values from the editable fields
+  const studentsData = graded.map(r => {
+    const sid = Object.keys(gradedResults).find(k => gradedResults[k] === r);
+    const bands = {}, comments = {};
+    for (const key of CRITERIA_KEYS) {
+      const bandEl    = document.getElementById(`band-${sid}-${key}`);
+      const commentEl = document.getElementById(`comment-${sid}-${key}`);
+      bands[key]    = bandEl    ? parseInt(bandEl.value)    : (r.bands[key]    || 0);
+      comments[key] = commentEl ? commentEl.value.trim()    : (r.comments[key] || "");
+    }
+    const overallEl = document.getElementById(`overall-${sid}`);
+    const overall_comments = overallEl ? overallEl.value.trim() : (r.overall_comments || "");
+    return {
+      name: r.name, transcript: r.transcript, bands, comments, overall_comments,
+      metrics: r.metrics || {},
+      annotations: r.annotations || [],
+      submitted_at: r.submitted_at || "", submission_type: r.submission_type || "",
+      topic: r.topic || "",
+    };
+  });
+
+  // Build title from assignment + section selectors
+  const assignSel  = document.getElementById("assignment_sel");
+  const sectionSel = document.getElementById("section_sel");
+  const assignName = assignSel.options[assignSel.selectedIndex]?.text || assignmentId() || "Assignment";
+  const sectionName = sectionSel.options[sectionSel.selectedIndex]?.text || sectionId() || "Section";
+  const date  = new Date().toLocaleDateString("en-GB");
+  const title = `Speaking Report — ${assignName} — ${sectionName} — ${date}`;
+
+  const btn = document.getElementById("reportBtn");
+  const statusEl = document.getElementById("report-status");
+  btn.disabled = true;
+  statusEl.textContent = "Creating document…";
+
+  // Tab title = assignment name (trimmed of point suffix like "(36pts)")
+  const tab_title = assignName.replace(/\s*\([\d.]+pts?\)\s*$/i, "").trim();
+
+  try {
+    const resp = await fetch("/api/create-speaking-report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ students: studentsData, title, tab_title }),
+    });
+    const data = await resp.json();
+    if (data.error) {
+      statusEl.innerHTML = `<span style="color:#c53030">${data.error}</span>`;
+    } else {
+      statusEl.innerHTML = `<a href="${data.url}" target="_blank" style="color:#276749;font-weight:600;">📄 Open Report ↗</a>`;
+    }
+  } catch(e) {
+    statusEl.innerHTML = `<span style="color:#c53030">${e.message}</span>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+</script>
+
+<!-- Submissions proxy endpoint (served from app.py) -->
+<script>
+// Override fetch for /api/canvas-submissions to parse the SSE-style writing endpoint
+// Actually we need a JSON endpoint — see note below.
+// The existing /api/grade-stream is SSE-only; we add a simple submissions-list endpoint.
+</script>
+
+</body>
+</html>
